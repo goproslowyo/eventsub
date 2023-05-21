@@ -1,39 +1,67 @@
 package utils
 
 import (
-	"fmt"
+	"encoding/json"
 	"os"
 	"path/filepath"
 
 	"github.com/charmbracelet/log"
+	"github.com/goproslowyo/eventsub/models"
 )
 
-// Check for cache data in $XDG_CACHE_HOME or $HOME/.cache. If not found, download and cache
-func fetchCache() error {
+type Cache struct {
+	CacheDir      string
+	CacheFilePath string
+	EventSubs     models.EventSubsLists
+}
+
+func (c Cache) GetCache() Cache {
+	// Check for cache data in $XDG_CACHE_HOME or $HOME/.cache.
+	// If not found, download and cache
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
-		return fmt.Errorf("failed to get user cache directory: %w", err)
+		log.Warnf("failed to get user cache directory: %w", err)
 	}
-
 	cacheFilePath := filepath.Join(cacheDir, "twitch-eventsub/subscriptions.json")
-
-	// Check if cache file exists
+	cacheFile, err := os.Open(cacheFilePath)
+	if err != nil {
+		log.Infof("failed to open cache file: %s", err)
+	}
 	if _, err := os.Stat(cacheFilePath); err == nil {
 		// Cache file exists, no need to download
-		return nil
-	}
+		// Parse json and return EventSubsLists
+		cacheFile, err := os.Open(cacheFilePath)
+		if err != nil {
+			log.Infof("failed to open cache file: %s", err)
+		}
+		defer cacheFile.Close()
 
-	// Cache file does not exist, download by calling the Twitch CLI
-	// resp, err :=
-	if err != nil {
-		log.Errorf("failed to download cache file: %s", err)
-	}
+		var eventSubsLists models.EventSubsLists
+		json.NewDecoder(cacheFile).Decode(&eventSubsLists)
+		if err != nil {
+			log.Errorf("failed to respose: %s", err)
+		}
 
-	cacheFile, err := os.Create(cacheFilePath)
-	if err != nil {
-		log.Errorf("failed to create cache file: %s", err)
+		return Cache{
+			CacheDir:      cacheDir,
+			CacheFilePath: cacheFilePath,
+			EventSubs:     eventSubsLists,
+		}
+	} else {
+		// Cache file does not exist
+		// download and cache by calling the Twitch CLI
+		resp, err := RunTwitchCli([]string{"api", "get", "eventsub/subscriptions"})
+		if err != nil {
+			log.Errorf("failed to download subscriptions: %s", err)
+		}
+		eventSubs := models.EventSubsLists{}
+		json.Unmarshal(resp, &eventSubs)
+		cacheFile.Write(resp)
+		defer cacheFile.Close()
+		return Cache{
+			CacheDir:      cacheDir,
+			CacheFilePath: cacheFilePath,
+			EventSubs:     eventSubs,
+		}
 	}
-	defer cacheFile.Close()
-
-	return nil
 }
